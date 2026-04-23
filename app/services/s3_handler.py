@@ -12,12 +12,13 @@ from flask import current_app
 
 def _s3_client():
     try:
-        import boto3
+        import boto3, certifi
         return boto3.client(
             "s3",
             aws_access_key_id=current_app.config.get("AWS_ACCESS_KEY_ID"),
             aws_secret_access_key=current_app.config.get("AWS_SECRET_ACCESS_KEY"),
             region_name=current_app.config.get("AWS_REGION", "us-east-1"),
+            verify=certifi.where(),
         )
     except ImportError:
         return None
