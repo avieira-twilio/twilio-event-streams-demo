@@ -310,66 +310,65 @@ async function renderRecordingsTable() {
     return;
   }
   tbody.innerHTML = data.items.map((r) => {
-    const audioSrc = r.source === "s3" && r.s3_key
-      ? `/api/recordings/presign/${r.recording_sid}`
-      : `/api/recordings/proxy/${r.recording_sid}`;
+    // Always use Play button — replaces itself with a compact audio player on click
+    const playBtn = `<button class="btn btn-secondary rec-play-btn"
+        style="font-size:0.75rem;padding:3px 10px"
+        onclick="playRecording(this,'${r.recording_sid}','${r.source}')">&#9654; Play</button>`;
 
-    // For S3, we fetch the presigned URL dynamically; for Twilio, proxy is direct.
-    const playerHtml = r.source === "s3"
+    const dlBtn = r.source === "s3"
       ? `<button class="btn btn-secondary" style="font-size:0.75rem;padding:3px 8px"
-           onclick="playS3Recording(this,'${r.recording_sid}')">&#9654; Play</button>`
-      : `<audio controls preload="none" style="height:28px;vertical-align:middle">
-           <source src="/api/recordings/proxy/${r.recording_sid}" type="audio/mpeg">
-         </audio>`;
-
-    const downloadHtml = r.source === "s3"
-      ? `<button class="btn btn-secondary" style="font-size:0.75rem;padding:3px 8px;margin-left:4px"
-           onclick="downloadS3Recording('${r.recording_sid}','${r.recording_sid}.mp3')">&#8595; DL</button>`
+           onclick="downloadS3Recording('${r.recording_sid}','${r.recording_sid}.mp3')">&#8595;</button>`
       : `<a href="/api/recordings/proxy/${r.recording_sid}" download="${r.recording_sid}.mp3"
-           class="btn btn-secondary" style="font-size:0.75rem;padding:3px 8px;margin-left:4px">&#8595; DL</a>`;
+           class="btn btn-secondary" style="font-size:0.75rem;padding:3px 8px">&#8595;</a>`;
 
     const sourceBadge = r.source === "s3"
       ? `<span class="badge" style="background:#1a73e8;color:#fff">S3</span>`
       : `<span class="badge badge-default">Twilio</span>`;
 
+    const sid  = (s) => `<span title="${s}" style="font-family:monospace;font-size:0.78rem;
+        display:inline-block;max-width:160px;overflow:hidden;text-overflow:ellipsis;
+        white-space:nowrap;vertical-align:bottom">${s}</span>`;
+
     return `
       <tr>
-        <td style="font-family:monospace;font-size:0.78rem">${r.recording_sid}</td>
-        <td style="font-family:monospace;font-size:0.78rem">${r.account_sid}</td>
-        <td style="font-family:monospace;font-size:0.78rem">${r.call_sid || "—"}</td>
+        <td>${sid(r.recording_sid)}</td>
+        <td>${sid(r.account_sid)}</td>
+        <td>${sid(r.call_sid || "—")}</td>
         <td>${statusBadge(r.status)}</td>
         <td>${r.duration_seconds ?? "—"}</td>
         <td>${r.channels === 2 ? "Dual" : "Mono"}</td>
         <td>${sourceBadge}</td>
-        <td>${fmtDt(r.recorded_at)}</td>
-        <td style="white-space:nowrap">${playerHtml}${downloadHtml}</td>
+        <td style="white-space:nowrap">${fmtDt(r.recorded_at)}</td>
+        <td style="white-space:nowrap">${playBtn} ${dlBtn}</td>
       </tr>
     `;
   }).join("");
   renderPagination("recordings-pagination", data.page, data.pages, (p) => { recsPage = p; renderRecordingsTable(); });
 }
 
-// Fetch presigned URL on demand and open an inline player for S3 recordings
-async function playS3Recording(btn, recordingSid) {
+// Unified play handler — fetches presigned URL for S3, uses proxy for Twilio
+async function playRecording(btn, recordingSid, source) {
   btn.disabled = true;
   btn.textContent = "Loading…";
   try {
-    const res = await fetch(`/api/recordings/presign/${recordingSid}`);
-    if (!res.ok) throw new Error("presign failed");
-    const { url } = await res.json();
+    let audioUrl;
+    if (source === "s3") {
+      const res = await fetch(`/api/recordings/presign/${recordingSid}`);
+      if (!res.ok) throw new Error("presign failed");
+      const { url } = await res.json();
+      audioUrl = url;
+    } else {
+      audioUrl = `/api/recordings/proxy/${recordingSid}`;
+    }
     const audio = document.createElement("audio");
     audio.controls = true;
-    audio.style.cssText = "height:28px;vertical-align:middle;margin-left:4px";
-    const src = document.createElement("source");
-    src.src = url;
-    src.type = "audio/mpeg";
-    audio.appendChild(src);
+    audio.style.cssText = "height:28px;max-width:160px;vertical-align:middle";
+    audio.src = audioUrl;
     btn.replaceWith(audio);
     audio.play();
   } catch {
     btn.disabled = false;
     btn.textContent = "▶ Play";
-    alert("Could not load audio. Check S3 configuration.");
   }
 }
 
