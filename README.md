@@ -1,65 +1,65 @@
-# Twilio Event Streams Demo Dashboard
+# Twilio Event Streams — Call & Conference Dashboard
+
+A production-ready reference implementation showing how to use Twilio Event Streams to build a real-time, subaccount-aware call and conference log dashboard with audio recording support.
 
 ## Why this exists
 
-**The limitation:** Twilio Console does not provide a way to grant read-only
-access to call or conference logs at the subaccount level. If a customer wants
-to give a client or analyst view-only visibility into a subaccount's call
-activity, there is no native Console permission to do that today.
+Twilio Console does not support granting read-only access to call or conference logs at the subaccount level. Customers who need to give clients or analysts view-only visibility have no native Console option today.
 
-**Twilio Support's recommendation:** Use [Event Streams](https://www.twilio.com/docs/events)
-to export Voice Insights and Conference Insights events in real-time to a
-webhook. Build a custom data store and visualization layer on top of that data.
+**Twilio's recommended solution:** Use [Event Streams](https://www.twilio.com/docs/events) to stream Voice Insights and Conference Insights events in real time to a webhook, then build a custom data and visualization layer on top.
 
-**What this repo is:** A working demo of that exact pattern. It is intended for
-educational and demonstration purposes only, not for production use.
+This repository is a complete, working implementation of that pattern — suitable both as a demo and as a foundation for a production deployment.
 
 ```
-Twilio (subaccount calls/conferences)
+Twilio Account / Subaccounts
         │
-        │  Voice Insights events (call-summary.complete, etc.)
-        │  Conference Insights events (conference.summary, etc.)
+        │  Voice Insights events  (call-summary.complete, conference-summary.complete, …)
+        │  Recording status callbacks  (recording.processed)
         ▼
-POST /webhook/events   ← this app
+POST /webhook/events  ←  this app
         │
-        ▼
-SQLite / PostgreSQL  →  Flask JSON API  →  Dashboard (Chart.js)
+        ├─► raw_event_log   (every event stored verbatim — dead-letter queue + replay)
+        │
+        ├─► call_logs / conference_logs / recording_logs  (normalized, indexed)
+        │
+        └─► Flask JSON API  →  Chart.js Dashboard  (filtered by subaccount)
 ```
 
 ---
 
 ## Tech stack
 
-| Layer | Tool |
-|---|---|
-| Backend | Python 3.12 + Flask 3 |
-| ORM / migrations | SQLAlchemy + Flask-Migrate |
-| Database | SQLite (dev, zero-setup) → PostgreSQL (Docker / prod) |
-| Frontend | Jinja2 templates + Chart.js 4 (CDN) |
-| Auth | Token-based session (demo-grade) |
-| Local tunnel | ngrok (free tier) |
-| Container | Docker + docker-compose (optional) |
+| Layer | Choice | Notes |
+|---|---|---|
+| Backend | Python 3.11+ / Flask 3 | App factory pattern, Blueprints |
+| ORM / Migrations | SQLAlchemy + Flask-Migrate | Schema-versioned, Alembic under the hood |
+| Database | SQLite (dev) → PostgreSQL (prod) | Zero-config locally; swap `DATABASE_URL` for prod |
+| Frontend | Jinja2 + Chart.js 4 (CDN) | No build step required |
+| Auth | Token-based session | Demo-grade; replace with SSO/OAuth for production |
+| Recording storage | Twilio (default) or AWS S3 | S3 upload triggered automatically when `AWS_S3_BUCKET` is set |
+| Container | Docker + docker-compose | Includes PostgreSQL service |
 
 ---
 
-## Quick start (local, SQLite)
+## Quick start (local demo, SQLite)
 
 ```bash
-# 1. Clone and enter the project
-cd event-streams
+# 1. Clone
+git clone https://github.com/avieira-twilio/twilio-event-streams-demo.git
+cd twilio-event-streams-demo
 
-# 2. Create and activate a virtual environment
+# 2. Create virtual environment
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. Configure
+# 4. Configure environment
 cp .env.example .env
-# Edit .env — at minimum set FLASK_SECRET_KEY and DASHBOARD_TOKEN
+# Edit .env — set FLASK_SECRET_KEY and DASHBOARD_TOKEN at minimum
 
-# 5. Initialize the database
+# 5. Initialize database
 flask --app wsgi:app db upgrade
 
 # 6. Seed with synthetic demo data (no Twilio account needed)
@@ -76,9 +76,9 @@ flask --app wsgi:app run
 ## Connecting to real Twilio Event Streams
 
 ### Prerequisites
-- A Twilio account (free trial works) with at least one subaccount
-- Voice Insights enabled (available on all accounts)
-- ngrok installed (`brew install ngrok` or download from ngrok.com)
+- A Twilio account with at least one subaccount
+- Voice Insights enabled (available on all paid accounts)
+- A publicly reachable HTTPS endpoint (ngrok for local dev, or a deployed URL)
 
 ### Steps
 
@@ -86,134 +86,84 @@ flask --app wsgi:app run
 # Terminal 1 — run the app
 flask --app wsgi:app run
 
-# Terminal 2 — expose it publicly
+# Terminal 2 — expose publicly for local testing
 ngrok http 5000
-# Copy the HTTPS URL, e.g. https://abc123.ngrok.io
 
-# Terminal 3 — create the Event Streams subscription on your subaccount
+# Terminal 3 — create the Event Streams Sink and Subscription
 python scripts/setup_event_streams.py \
     --account-sid ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
-    --auth-token  your_subaccount_auth_token \
-    --webhook-url https://abc123.ngrok.io/webhook/events
+    --auth-token  your_master_account_auth_token \
+    --webhook-url https://your-subdomain.ngrok-free.app/webhook/events
 ```
 
-Then place a call through that subaccount. Within ~60 seconds of call
-completion, a Voice Insights event arrives at the webhook. Refresh the
-dashboard to see it.
+Place a call through any subaccount. Within ~60 seconds of call completion, a Voice Insights event arrives and appears in the dashboard.
 
-Run `setup_event_streams.py` once per subaccount you want to monitor.
+> **Auth Token note:** `TWILIO_AUTH_TOKEN` in `.env` must match the account that owns the subscription. Use the master account token for master-level subscriptions.
 
-**Auth Token note:** The `TWILIO_AUTH_TOKEN` in `.env` must match the account
-that owns the Event Streams subscription — master account token for
-master-account subscriptions, subaccount token for subaccount subscriptions.
+---
+
+## Audio recordings
+
+Set the following environment variables to automatically upload recordings to S3:
+
+```
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_REGION=us-east-1
+AWS_S3_BUCKET=your-bucket-name
+```
+
+When `AWS_S3_BUCKET` is set, recordings are downloaded from Twilio and uploaded to `s3://your-bucket/recordings/{account_sid}/{recording_sid}.mp3` immediately on receipt. The dashboard shows a blue **S3** badge and serves audio via presigned URLs. Without S3 configured, recordings are proxied directly from Twilio.
+
+For the recording status callback to fire, pass `recordingStatusCallback` when creating calls:
+
+```python
+client.calls.create(
+    to=to_number,
+    from_=from_number,
+    url="...",
+    record=True,
+    recording_status_callback="https://your-app.com/webhook/recording-status",
+    recording_status_callback_method="POST",
+)
+```
 
 ---
 
 ## Docker (PostgreSQL)
 
 ```bash
-cp .env.example .env   # fill in values (DATABASE_URL is overridden by docker-compose)
+cp .env.example .env   # fill in values
 docker compose -f docker/docker-compose.yml up --build
 
-# In a second terminal, run migrations and seed:
+# Run migrations (first time only)
 docker compose -f docker/docker-compose.yml exec web flask --app wsgi:app db upgrade
+
+# Optionally seed demo data
 docker compose -f docker/docker-compose.yml exec web python scripts/seed_demo_data.py
 ```
 
 ---
 
-## Migrating from SQLite to PostgreSQL
-
-```bash
-# Export from SQLite, import into PostgreSQL:
-export PG_DATABASE_URL=postgresql://user:pass@host:5432/twilio_dashboard
-python scripts/migrate_sqlite_to_pg.py   # (DIY — see plan for outline)
-```
-
-Or simply re-seed against PostgreSQL from scratch and let real events repopulate.
-
----
-
 ## API reference
 
-All endpoints (except `/webhook/events` and `/api/health`) require authentication.
+All endpoints except `/webhook/events`, `/webhook/recording-status`, and `/api/health` require authentication.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/subaccounts` | Distinct account SIDs in the DB |
+| `POST` | `/webhook/events` | Twilio Event Streams receiver (CloudEvents 1.0 array) |
+| `POST` | `/webhook/recording-status` | Direct recording status callback |
+| `GET` | `/api/health` | Latest event timestamp + unprocessed count |
+| `GET` | `/api/subaccounts` | Distinct account SIDs in the database |
 | `GET` | `/api/calls` | Paginated call logs. Filters: `account_sid`, `status`, `from`, `to`, `page` |
 | `GET` | `/api/conferences` | Paginated conference logs. Same filters. |
+| `GET` | `/api/recordings` | Paginated recording logs. Filters: `account_sid`, `status`, `from`, `to`, `page` |
+| `GET` | `/api/recordings/proxy/<sid>` | Stream Twilio audio to browser (server-side proxy) |
+| `GET` | `/api/recordings/presign/<sid>` | Return S3 presigned URL for browser playback |
 | `GET` | `/api/charts/call-volume` | Daily call counts by subaccount |
 | `GET` | `/api/charts/call-duration` | Avg + max duration by subaccount |
-| `GET` | `/api/charts/error-rate` | Daily error % by subaccount |
+| `GET` | `/api/charts/error-rate` | Daily error percentage by subaccount |
 | `GET` | `/api/charts/call-status` | Status breakdown by subaccount |
-| `GET` | `/api/health` | Latest event timestamp + unprocessed count |
-| `POST` | `/webhook/events` | Twilio Event Streams webhook receiver |
-
----
-
-## Best practices
-
-### Handling Twilio event schema changes
-
-- Every event is stored verbatim in the `raw_payload` / `payload` JSON column.
-  If Twilio adds, renames, or removes a field, historical data is preserved
-  and re-parseable by replaying rows from `raw_event_log`.
-- `event_parser.py` uses `.get()` everywhere with safe fallbacks — it never
-  assumes a field exists. When Twilio announces schema changes, update the
-  parser and replay from `raw_event_log` with `processed=False` rows.
-
-### Monitoring for dropped events
-
-- **Dead-letter queue:** Any `raw_event_log` row with `processed=False` means
-  the parser raised an exception. Query these regularly and alert if any are
-  older than 1 hour.
-- **Sequence gap detection:** The `event_id` column stores the
-  `X-Twilio-Event-Id` header. Gaps in sequential event IDs indicate dropped
-  deliveries. Twilio will retry failed webhooks, but permanent gaps can be
-  cross-checked against the REST API.
-- **Health endpoint:** `GET /api/health` returns the timestamp of the most
-  recently received event and the unprocessed count. Wire this into your
-  monitoring system and alert if the latest event is stale by more than
-  30 minutes during business hours.
-- **REST API reconciliation:** Periodically fetch call counts from
-  `client.calls.list()` per subaccount and compare against `call_logs` row
-  counts. A significant delta indicates missed events.
-
-### Twilio signature validation
-
-- Signature validation is on by default. **Never disable it in production.**
-- If running behind a reverse proxy (nginx, load balancer, ngrok), the
-  `ProxyFix` middleware in `app/__init__.py` ensures `request.url` matches
-  what Twilio signed.
-- After rotating an Auth Token in the Twilio Console, update `TWILIO_AUTH_TOKEN`
-  in `.env` and restart the app. There is a brief window where requests may
-  fail with 403; plan for a short outage window or implement dual-token
-  validation during rotation.
-
----
-
-## Optional: Grafana integration
-
-Because all data lives in PostgreSQL, connecting Grafana is straightforward:
-
-1. Run Grafana locally: `docker run -p 3000:3000 grafana/grafana`
-2. Add a PostgreSQL data source pointing to the same `DATABASE_URL`.
-3. Build panels using direct SQL:
-
-```sql
--- Call volume over time by subaccount
-SELECT
-  date_trunc('day', started_at) AS time,
-  account_sid,
-  count(*) AS calls
-FROM call_logs
-WHERE started_at BETWEEN $__timeFrom() AND $__timeTo()
-GROUP BY 1, 2
-ORDER BY 1;
-```
-
-Use Grafana template variables (`account_sid`) for subaccount filtering.
 
 ---
 
@@ -222,34 +172,55 @@ Use Grafana template variables (`account_sid`) for subaccount filtering.
 ```
 event-streams/
 ├── app/
-│   ├── __init__.py            Flask app factory + ProxyFix
+│   ├── __init__.py            Flask app factory + ProxyFix middleware
 │   ├── config.py              Dev / Prod config classes
 │   ├── extensions.py          db, migrate singletons
-│   ├── models.py              CallLog, ConferenceLog, ConferenceParticipantLog, RawEventLog
+│   ├── models.py              CallLog, ConferenceLog, ConferenceParticipantLog,
+│   │                          RecordingLog, RawEventLog
 │   ├── routes/
 │   │   ├── auth.py            /login, /logout, @require_auth decorator
-│   │   ├── webhook.py         POST /webhook/events
+│   │   ├── webhook.py         POST /webhook/events and /webhook/recording-status
 │   │   ├── api.py             JSON API endpoints
 │   │   └── dashboard.py       HTML dashboard route
 │   ├── services/
-│   │   └── event_parser.py    Raw payload → domain models
+│   │   ├── event_parser.py    Raw payload → domain models (CloudEvents + legacy)
+│   │   └── s3_handler.py      S3 upload + presigned URL generation
 │   ├── templates/
 │   │   ├── base.html
 │   │   ├── login.html
 │   │   └── dashboard.html
 │   └── static/js/charts.js   Chart.js rendering + table pagination
 ├── scripts/
-│   ├── seed_demo_data.py      Synthetic data (200 calls, 50 conferences)
-│   └── setup_event_streams.py Create Twilio Sink + Subscription
+│   ├── seed_demo_data.py      Synthetic data (200 calls, 50 conferences, 40 recordings)
+│   ├── setup_event_streams.py Create Twilio Sink + Subscription
+│   └── make_recorded_call.py  Place a test call with recording + status callback
 ├── docker/
 │   ├── Dockerfile
 │   └── docker-compose.yml
 ├── wsgi.py
 ├── requirements.txt
-└── .env.example
+├── .env.example
+├── README.md
+├── PRODUCTION_GUIDE.md        ← Production deployment guidelines for customers
+└── STARTUP_GUIDE.md           ← Local demo startup instructions
 ```
 
 ---
 
-*Demo use only. Not intended for production deployment without additional
-security hardening, rate limiting, and proper secret management.*
+## Best practices
+
+### Schema resilience
+Every event is stored verbatim in the `raw_payload` JSON column. If Twilio changes field names or adds new fields, historical data is preserved and re-parseable by replaying from `raw_event_log`. The parser uses `.get()` everywhere with safe fallbacks.
+
+### Dropped event detection
+- `raw_event_log` rows with `processed=False` act as a dead-letter queue. Alert on any row older than 1 hour.
+- The `event_id` column stores `X-Twilio-Event-Id`. Gaps in sequential IDs indicate dropped deliveries.
+- `GET /api/health` returns the latest event timestamp and unprocessed count. Wire this into your monitoring system.
+- Periodically reconcile against the Twilio REST API: `client.calls.list()` per subaccount vs. `call_logs` row counts.
+
+### Signature validation
+Validation is on by default. Never disable it in production. The `ProxyFix` middleware in `app/__init__.py` ensures `request.url` matches the URL Twilio signed when running behind a reverse proxy. After rotating an Auth Token, update `.env` and restart — plan for a brief 403 window or implement dual-token validation during rotation.
+
+---
+
+*See `PRODUCTION_GUIDE.md` for guidelines on deploying this to a production environment.*

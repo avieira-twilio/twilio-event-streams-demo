@@ -2,10 +2,10 @@
 
 ## What you have
 
-| Environment | URL | Purpose |
+| Environment | Port | Purpose |
 |---|---|---|
-| Demo | http://localhost:5000 | Pre-populated with 200 synthetic calls across 3 fake subaccounts |
-| Live | http://localhost:5001 | Real Twilio events from your master account |
+| **Demo** | 5000 | Pre-populated with 200 synthetic calls, 50 conferences, and 40 recordings across 3 fake subaccounts. No Twilio account needed. |
+| **Live** | 5001 | Receives real Twilio events from your master account via ngrok. |
 
 Login tokens:
 - Demo: `demo-access-token`
@@ -17,8 +17,6 @@ Login tokens:
 
 You need **3 terminals** open simultaneously.
 
----
-
 ### Terminal 1 — Demo app (port 5000)
 
 ```bash
@@ -26,8 +24,6 @@ cd /Users/avieira/Claude/event-streams
 source venv/bin/activate
 flask --app wsgi:app run --port 5000
 ```
-
----
 
 ### Terminal 2 — Live app (port 5001)
 
@@ -37,77 +33,71 @@ source venv/bin/activate
 flask --app wsgi:app run --port 5001
 ```
 
----
-
 ### Terminal 3 — ngrok (exposes live app to Twilio)
 
 ```bash
-ngrok http 5001
-```
-
-ngrok will print your public HTTPS URL, e.g.:
-```
-https://your-subdomain.ngrok-free.dev
+ngrok http 5001 --domain=interfactional-unprohibitively-waltraud.ngrok-free.dev
 ```
 
 ---
 
 ## Verify everything is working
 
-1. Open http://localhost:5000 → sign in with `demo-access-token` → charts and call logs should be populated
+1. Open http://localhost:5000 → sign in with `demo-access-token` → charts and all three log tabs should be populated
 2. Open http://localhost:5001 → sign in with `live-access-token` → shows real calls
-3. Open http://127.0.0.1:4040 → ngrok inspector, shows incoming Twilio events
+3. Open http://127.0.0.1:4040 → ngrok inspector, shows incoming Twilio events in real time
 
 ---
 
-## Make a real test call (optional, to show live data arriving)
+## Make a test call (shows live data arriving)
 
-Open a 4th terminal and run:
+Open a 4th terminal:
 
 ```bash
-python3 -c "
+cd /Users/avieira/Claude/event-streams-live && source venv/bin/activate && python -c "
 from twilio.rest import Client
-c = Client('YOUR_ACCOUNT_SID', 'YOUR_AUTH_TOKEN')
-call = c.calls.create(from_='YOUR_TWILIO_NUMBER', to='YOUR_VERIFIED_NUMBER', url='http://demo.twilio.com/docs/voice.xml')
-print('Call SID:', call.sid, 'Status:', call.status)
+from dotenv import load_dotenv
+import os
+load_dotenv('.env')
+c = Client('YOUR_ACCOUNT_SID', os.getenv('TWILIO_AUTH_TOKEN'))
+c.calls.create(to='+YOUR_MOBILE', from_='+YOUR_TWILIO_NUMBER', url='http://demo.twilio.com/docs/voice.xml')
+print('Call placed.')
 "
 ```
 
-Wait ~60 seconds, then refresh http://localhost:5001 — the new call will appear.
+Wait ~60 seconds, refresh http://localhost:5001 — the call appears in the Call Logs tab.
 
 ---
 
-## Make a real test conference (to populate Conference Logs)
-
-You only need your one mobile number. This creates a named conference room and
-calls your mobile twice — both legs join the same room, simulating a 2-participant
-conference.
-
-Open a 4th terminal and run:
+## Make a test call with recording (shows Recording Logs + S3)
 
 ```bash
-python3 -c "
+cd /Users/avieira/Claude/event-streams-live && source venv/bin/activate && python scripts/make_recorded_call.py
+```
+
+Answer your phone, wait for the call to end. Within 1–2 minutes, a recording entry appears in the Recording Logs tab with a blue **S3** badge. Click **▶ Play** to stream audio directly from S3.
+
+---
+
+## Make a test conference call
+
+This creates a named conference room and calls your mobile twice — both legs join the same room, simulating a 2-participant conference.
+
+```bash
+cd /Users/avieira/Claude/event-streams-live && source venv/bin/activate && python -c "
 from twilio.rest import Client
-
-c = Client('YOUR_ACCOUNT_SID', 'YOUR_AUTH_TOKEN')
-
+from dotenv import load_dotenv
+import os
+load_dotenv('.env')
+c = Client('YOUR_ACCOUNT_SID', os.getenv('TWILIO_AUTH_TOKEN'))
 twiml = '<Response><Dial><Conference>DemoRoom</Conference></Dial></Response>'
-
-call1 = c.calls.create(from_='YOUR_TWILIO_NUMBER', to='YOUR_VERIFIED_NUMBER', twiml=twiml)
-print('Leg 1:', call1.sid)
-
-call2 = c.calls.create(from_='YOUR_TWILIO_NUMBER', to='YOUR_VERIFIED_NUMBER', twiml=twiml)
-print('Leg 2:', call2.sid)
+c.calls.create(to='+YOUR_MOBILE', from_='+YOUR_TWILIO_NUMBER', twiml=twiml)
+c.calls.create(to='+YOUR_MOBILE', from_='+YOUR_TWILIO_NUMBER', twiml=twiml)
+print('Both legs placed.')
 "
 ```
 
-What happens:
-1. Your mobile rings — answer it, you are now in the conference room
-2. Your mobile rings a second time — answer it (or let it go to voicemail, it still counts as a participant)
-3. Talk for a few seconds, then hang up both calls
-4. A `conference-summary.complete` event fires ~60 seconds after the conference ends
-
-Refresh http://localhost:5001 and the conference will appear in the Conference Logs tab.
+Answer both calls, talk briefly, hang up. A `conference-summary.complete` event fires ~60 seconds after. Refresh the Conference Logs tab.
 
 ---
 
@@ -115,8 +105,10 @@ Refresh http://localhost:5001 and the conference will appear in the Conference L
 
 | Problem | Fix |
 |---|---|
-| Port 5000 already in use | `lsof -ti :5000 \| xargs kill` |
-| Port 5001 already in use | `lsof -ti :5001 \| xargs kill` |
-| ngrok error: endpoint already online | `pkill ngrok` then re-run `ngrok http 5001` |
-| Live dashboard empty after calls | Check http://127.0.0.1:4040 — if events show 500, Flask wasn't running; click Replay on each |
-| Signed out unexpectedly | Browser cleared session cookie — just sign in again |
+| Port 5000 already in use | `lsof -ti :5000 \| xargs kill -9` |
+| Port 5001 already in use | `lsof -ti :5001 \| xargs kill -9` |
+| ngrok error: endpoint already online | `pkill ngrok` then re-run |
+| Live dashboard empty after calls | Check http://127.0.0.1:4040 — if events show 403, the ProxyFix header is missing; if 500, check Flask logs. Click Replay after fixing. |
+| Recordings not appearing | Confirm `AWS_S3_BUCKET` is set in `.env`; check Flask logs for S3 errors |
+| "Invalid signature" on webhook | Ensure `TWILIO_AUTH_TOKEN` in `.env` matches the account that owns the Event Streams subscription |
+| Browser shows wrong dashboard | Demo and live share `localhost` cookie domain — use a regular window for one and an incognito window for the other |
