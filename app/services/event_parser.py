@@ -13,13 +13,18 @@ from app.models import CallLog, ConferenceLog, ConferenceParticipantLog, Recordi
 
 
 def _parse_dt(value):
-    """Parse an ISO 8601 string to a UTC-aware datetime, or return None."""
+    """Parse ISO 8601 or RFC 2822 string to a UTC-aware datetime, or return None."""
     if not value:
         return None
     try:
-        # Handle both Z-suffix and +00:00 forms
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except (ValueError, AttributeError):
+        pass
+    try:
+        # RFC 2822 format from Twilio direct callbacks: "Thu, 23 Apr 2026 21:14:12 +0000"
+        from email.utils import parsedate_to_datetime
+        return parsedate_to_datetime(value)
+    except Exception:
         return None
 
 
