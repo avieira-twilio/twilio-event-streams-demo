@@ -7,11 +7,12 @@ and date range.
 """
 
 from datetime import datetime, timezone
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, Response, current_app
 from sqlalchemy import func, case
+import requests as http_requests
 
 from app.extensions import db
-from app.models import CallLog, ConferenceLog, RawEventLog
+from app.models import CallLog, ConferenceLog, RawEventLog, RecordingLog
 from app.routes.auth import require_auth
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
@@ -202,6 +203,86 @@ def chart_call_status():
         {"account_sid": r.account_sid, "status": r.status, "count": r.count}
         for r in rows
     ])
+
+
+# ---------------------------------------------------------------------------
+# Recording logs
+# ---------------------------------------------------------------------------
+
+def _apply_recording_filters(query, args):
+    if args.get("account_sid"):
+        query = query.filter(RecordingLog.account_sid == args["account_sid"])
+    if args.get("status"):
+        query = query.filter(RecordingLog.status == args["status"])
+    if from_dt := _parse_date(args.get("from")):
+        query = query.filter(RecordingLog.recorded_at >= from_dt)
+    if to_dt := _parse_date(args.get("to")):
+        query = query.filter(RecordingLog.recorded_at <= to_dt)
+    return query
+
+
+@api_bp.get("/recordings")
+@require_auth
+def list_recordings():
+    page = max(1, int(request.args.get("page", 1)))
+    query = _apply_recording_filters(
+        RecordingLog.query.order_by(RecordingLog.recorded_at.desc()), request.args
+    )
+    total = query.count()
+    rows = query.offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE).all()
+    return jsonify({
+        "total": total,
+        "page": page,
+        "pages": max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE),
+        "items": [r.to_dict() for r in rows],
+    })
+
+
+@api_bp.get("/recordings/proxy/<recording_sid>")
+@require_auth
+def proxy_recording(recording_sid):
+    """Stream a Twilio-hosted recording to the browser (avoids CORS + auth headers)."""
+    rec = RecordingLog.query.filter_by(recording_sid=recording_sid).first()
+    if rec is None:
+        return jsonify({"error": "not found"}), 404
+    if not rec.twilio_url:
+        return jsonify({"error": "no twilio url"}), 404
+
+    auth_token = current_app.config.get("TWILIO_AUTH_TOKEN", "")
+    try:
+        resp = http_requests.get(
+            rec.twilio_url,
+            auth=(rec.account_sid, auth_token),
+            stream=True,
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        current_app.logger.error("Recording proxy failed for %s: %s", recording_sid, e)
+        return jsonify({"error": "upstream fetch failed"}), 502
+
+    return Response(
+        resp.iter_content(chunk_size=8192),
+        content_type=resp.headers.get("Content-Type", "audio/mpeg"),
+        headers={"Content-Disposition": f'inline; filename="{recording_sid}.mp3"'},
+    )
+
+
+@api_bp.get("/recordings/presign/<recording_sid>")
+@require_auth
+def presign_recording(recording_sid):
+    """Return a short-lived S3 presigned URL for browser playback."""
+    rec = RecordingLog.query.filter_by(recording_sid=recording_sid).first()
+    if rec is None:
+        return jsonify({"error": "not found"}), 404
+    if not rec.s3_key:
+        return jsonify({"error": "not in s3"}), 404
+
+    from app.services.s3_handler import generate_presigned_url
+    url = generate_presigned_url(rec.s3_key)
+    if url is None:
+        return jsonify({"error": "presign failed"}), 500
+    return jsonify({"url": url})
 
 
 # ---------------------------------------------------------------------------

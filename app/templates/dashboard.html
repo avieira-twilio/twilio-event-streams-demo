@@ -70,6 +70,7 @@
     <div class="tabs">
       <button class="tab-btn active" data-tab="calls">Call Logs</button>
       <button class="tab-btn" data-tab="conferences">Conference Logs</button>
+      <button class="tab-btn" data-tab="recordings">Recording Logs</button>
     </div>
 
     <!-- Call logs tab -->
@@ -113,6 +114,29 @@
         </tbody>
       </table>
       <div class="pagination" id="conferences-pagination"></div>
+    </div>
+
+    <!-- Recording logs tab -->
+    <div id="tab-recordings" class="tab-panel">
+      <table id="recordings-table">
+        <thead>
+          <tr>
+            <th>Recording SID</th>
+            <th>Subaccount</th>
+            <th>Call SID</th>
+            <th>Status</th>
+            <th>Duration (s)</th>
+            <th>Channels</th>
+            <th>Source</th>
+            <th>Recorded At</th>
+            <th>Play / Download</th>
+          </tr>
+        </thead>
+        <tbody id="recordings-tbody">
+          <tr><td colspan="9" style="text-align:center;color:#aaa;padding:2rem">Loading&hellip;</td></tr>
+        </tbody>
+      </table>
+      <div class="pagination" id="recordings-pagination"></div>
     </div>
   </div>
 

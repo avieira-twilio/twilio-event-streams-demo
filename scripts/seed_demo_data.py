@@ -1,5 +1,5 @@
 """
-Seed the database with synthetic call and conference events for demo purposes.
+Seed the database with synthetic call, conference, and recording events for demo purposes.
 
 Usage (from project root, with venv active):
     python scripts/seed_demo_data.py
@@ -10,8 +10,9 @@ into the database. Never run against a production database.
 Generates:
   - 200 call events spread across 3 fake subaccounts over the last 30 days
   - 50 conference events across the same subaccounts
+  - 40 recording events linked to completed calls
   - All events are written to raw_event_log (processed=True) and to the
-    normalized domain tables (call_logs, conference_logs).
+    normalized domain tables (call_logs, conference_logs, recording_logs).
 """
 
 import os
@@ -31,7 +32,7 @@ os.environ.setdefault("SKIP_SIGNATURE_VALIDATION", "true")
 
 from app import create_app
 from app.extensions import db
-from app.models import CallLog, ConferenceLog, RawEventLog
+from app.models import CallLog, ConferenceLog, RawEventLog, RecordingLog
 
 # ---------------------------------------------------------------------------
 # Fake subaccount SIDs (resembling real Twilio SIDs for demo realism)
@@ -169,9 +170,61 @@ def seed_conferences(n=50):
     print("  Done.")
 
 
+def seed_recordings(n=40):
+    """Seed n fake recording rows linked to existing completed calls."""
+    print(f"Seeding {n} recording records…")
+    completed_calls = CallLog.query.filter_by(status="completed").limit(n).all()
+    for i, call in enumerate(completed_calls):
+        rec_sid = f"RE{i:032d}"
+        duration = random.randint(5, call.duration_seconds or 30)
+        channels = random.choice([1, 1, 1, 2])  # mostly mono
+
+        payload = {
+            "type": "com.twilio.voice.status-callback.recording.processed",
+            "AccountSid": call.account_sid,
+            "RecordingSid": rec_sid,
+            "CallSid": call.call_sid,
+            "RecordingStatus": "completed",
+            "RecordingDuration": str(duration),
+            "RecordingChannels": str(channels),
+            # Fake Twilio URL (won't play in demo — no real auth)
+            "RecordingUrl": f"https://api.twilio.com/2010-04-01/Accounts/{call.account_sid}/Recordings/{rec_sid}.mp3",
+            "RecordingStartTime": call.started_at.isoformat() if call.started_at else None,
+        }
+
+        raw = RawEventLog(
+            event_id=f"EVsedrec{i:013d}",
+            event_type=payload["type"],
+            account_sid=call.account_sid,
+            payload=payload,
+            processed=True,
+            received_at=call.started_at,
+        )
+        db.session.add(raw)
+
+        rec = RecordingLog(
+            account_sid=call.account_sid,
+            recording_sid=rec_sid,
+            call_sid=call.call_sid,
+            status="completed",
+            duration_seconds=duration,
+            channels=channels,
+            source="twilio",
+            twilio_url=payload["RecordingUrl"],
+            recorded_at=call.started_at,
+            raw_payload=payload,
+            received_at=call.started_at,
+        )
+        db.session.add(rec)
+
+    db.session.commit()
+    print("  Done.")
+
+
 if __name__ == "__main__":
     app = create_app()
     with app.app_context():
         seed_calls(200)
         seed_conferences(50)
+        seed_recordings(40)
     print("\nSeeding complete. Run `flask run` and visit http://localhost:5000")

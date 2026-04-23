@@ -102,6 +102,42 @@ class ConferenceParticipantLog(db.Model):
         }
 
 
+class RecordingLog(db.Model):
+    """Audio recording metadata, supporting both Twilio and S3 storage."""
+    __tablename__ = "recording_logs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    account_sid = db.Column(db.String(34), nullable=False, index=True)
+    recording_sid = db.Column(db.String(34), unique=True, nullable=False)
+    call_sid = db.Column(db.String(34), index=True)  # links back to call_logs
+    status = db.Column(db.String(20))                # completed, failed, absent
+    duration_seconds = db.Column(db.Integer)
+    channels = db.Column(db.Integer, default=1)      # 1=mono, 2=dual-channel
+    source = db.Column(db.String(20))                # twilio, s3
+    twilio_url = db.Column(db.String(512))           # Twilio media URL (always stored)
+    s3_url = db.Column(db.String(512))               # S3 object URL (if uploaded)
+    s3_key = db.Column(db.String(512))               # S3 object key
+    recorded_at = db.Column(db.DateTime, index=True)
+    raw_payload = db.Column(db.JSON)
+    received_at = db.Column(db.DateTime, default=_now)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "account_sid": self.account_sid,
+            "recording_sid": self.recording_sid,
+            "call_sid": self.call_sid,
+            "status": self.status,
+            "duration_seconds": self.duration_seconds,
+            "channels": self.channels,
+            "source": self.source,
+            "twilio_url": self.twilio_url,
+            "s3_url": self.s3_url,
+            "recorded_at": self.recorded_at.isoformat() if self.recorded_at else None,
+            "received_at": self.received_at.isoformat() if self.received_at else None,
+        }
+
+
 class RawEventLog(db.Model):
     """Dead-letter queue and audit log for every received event."""
     __tablename__ = "raw_event_log"

@@ -29,6 +29,7 @@ EVENT_TYPES = [
     {"type": "voice.insights.call-summary.error"},
     {"type": "insights.conference.summary"},
     {"type": "insights.conference.participant-summary"},
+    {"type": "com.twilio.voice.status-callback.recording.processed"},
 ]
 
 

@@ -25,6 +25,7 @@ const colorFor = (() => {
 let filters = { account_sid: "", from: "", to: "", status: "" };
 let callsPage = 1;
 let confsPage = 1;
+let recsPage = 1;
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -57,6 +58,7 @@ function wireFilters() {
     filters.status = document.getElementById("filter-status").value;
     callsPage = 1;
     confsPage = 1;
+    recsPage = 1;
     refreshAll();
   });
 
@@ -64,6 +66,7 @@ function wireFilters() {
     filters = { account_sid: "", from: "", to: "", status: "" };
     callsPage = 1;
     confsPage = 1;
+    recsPage = 1;
     document.getElementById("filter-account").value = "";
     document.getElementById("filter-from").value = "";
     document.getElementById("filter-to").value = "";
@@ -110,6 +113,7 @@ async function refreshAll() {
       renderStatusChart(),
       renderCallsTable(),
       renderConferencesTable(),
+      renderRecordingsTable(),
     ]);
   } finally {
     setLoading(false);
@@ -295,6 +299,92 @@ async function renderConferencesTable() {
     </tr>
   `).join("");
   renderPagination("conferences-pagination", data.page, data.pages, (p) => { confsPage = p; renderConferencesTable(); });
+}
+
+async function renderRecordingsTable() {
+  const data = await apiFetch("/api/recordings", { page: recsPage });
+  const tbody = document.getElementById("recordings-tbody");
+  if (!data.items.length) {
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#aaa;padding:2rem">No recordings found.</td></tr>`;
+    document.getElementById("recordings-pagination").innerHTML = "";
+    return;
+  }
+  tbody.innerHTML = data.items.map((r) => {
+    const audioSrc = r.source === "s3" && r.s3_key
+      ? `/api/recordings/presign/${r.recording_sid}`
+      : `/api/recordings/proxy/${r.recording_sid}`;
+
+    // For S3, we fetch the presigned URL dynamically; for Twilio, proxy is direct.
+    const playerHtml = r.source === "s3"
+      ? `<button class="btn btn-secondary" style="font-size:0.75rem;padding:3px 8px"
+           onclick="playS3Recording(this,'${r.recording_sid}')">&#9654; Play</button>`
+      : `<audio controls preload="none" style="height:28px;vertical-align:middle">
+           <source src="/api/recordings/proxy/${r.recording_sid}" type="audio/mpeg">
+         </audio>`;
+
+    const downloadHtml = r.source === "s3"
+      ? `<button class="btn btn-secondary" style="font-size:0.75rem;padding:3px 8px;margin-left:4px"
+           onclick="downloadS3Recording('${r.recording_sid}','${r.recording_sid}.mp3')">&#8595; DL</button>`
+      : `<a href="/api/recordings/proxy/${r.recording_sid}" download="${r.recording_sid}.mp3"
+           class="btn btn-secondary" style="font-size:0.75rem;padding:3px 8px;margin-left:4px">&#8595; DL</a>`;
+
+    const sourceBadge = r.source === "s3"
+      ? `<span class="badge" style="background:#1a73e8;color:#fff">S3</span>`
+      : `<span class="badge badge-default">Twilio</span>`;
+
+    return `
+      <tr>
+        <td style="font-family:monospace;font-size:0.78rem">${r.recording_sid}</td>
+        <td style="font-family:monospace;font-size:0.78rem">${r.account_sid}</td>
+        <td style="font-family:monospace;font-size:0.78rem">${r.call_sid || "—"}</td>
+        <td>${statusBadge(r.status)}</td>
+        <td>${r.duration_seconds ?? "—"}</td>
+        <td>${r.channels === 2 ? "Dual" : "Mono"}</td>
+        <td>${sourceBadge}</td>
+        <td>${fmtDt(r.recorded_at)}</td>
+        <td style="white-space:nowrap">${playerHtml}${downloadHtml}</td>
+      </tr>
+    `;
+  }).join("");
+  renderPagination("recordings-pagination", data.page, data.pages, (p) => { recsPage = p; renderRecordingsTable(); });
+}
+
+// Fetch presigned URL on demand and open an inline player for S3 recordings
+async function playS3Recording(btn, recordingSid) {
+  btn.disabled = true;
+  btn.textContent = "Loading…";
+  try {
+    const res = await fetch(`/api/recordings/presign/${recordingSid}`);
+    if (!res.ok) throw new Error("presign failed");
+    const { url } = await res.json();
+    const audio = document.createElement("audio");
+    audio.controls = true;
+    audio.style.cssText = "height:28px;vertical-align:middle;margin-left:4px";
+    const src = document.createElement("source");
+    src.src = url;
+    src.type = "audio/mpeg";
+    audio.appendChild(src);
+    btn.replaceWith(audio);
+    audio.play();
+  } catch {
+    btn.disabled = false;
+    btn.textContent = "▶ Play";
+    alert("Could not load audio. Check S3 configuration.");
+  }
+}
+
+async function downloadS3Recording(recordingSid, filename) {
+  try {
+    const res = await fetch(`/api/recordings/presign/${recordingSid}`);
+    if (!res.ok) throw new Error("presign failed");
+    const { url } = await res.json();
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+  } catch {
+    alert("Could not generate download link. Check S3 configuration.");
+  }
 }
 
 function renderPagination(containerId, current, total, onPageClick) {
