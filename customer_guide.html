@@ -167,6 +167,10 @@ Your Webhook  →  Database  →  Read-Only Dashboard<br>
     <td><code>com.twilio.voice.insights.conference-participant-summary.complete</code></td>
     <td>A conference participant disconnects</td>
   </tr>
+  <tr>
+    <td><code>com.twilio.voice.status-callback.recording.processed</code></td>
+    <td>A call recording has been transcoded and is ready for download</td>
+  </tr>
 </table>
 
 <!-- ─────────────────────────────────────────── -->
@@ -373,7 +377,61 @@ CREATE INDEX idx_conference_logs_account_sid ON conference_logs (account_sid);</
 </table>
 
 <!-- ─────────────────────────────────────────── -->
-<h2>6. Access Control</h2>
+<h2>6. Audio Recordings (Optional)</h2>
+
+<p>The same Event Streams pattern extends to call recordings. When recording is enabled on a call, Twilio fires a status callback when the audio file is ready. The application can then copy it to your own storage (AWS S3) and serve it to authorized users via time-limited presigned URLs.</p>
+
+<div class="arch">
+Call ends with recording enabled
+  │
+  ├─► POST /webhook/recording-status  (direct Twilio callback)
+  │
+  ├─► App downloads .mp3 from Twilio  (authenticated with Auth Token)
+  │
+  ├─► App uploads to S3:  recordings/{account_sid}/{recording_sid}.mp3
+  │
+  └─► Dashboard serves audio via presigned URL  (expires after 1 hour)
+</div>
+
+<p>To trigger the recording callback, pass <code>recordingStatusCallback</code> when creating the call:</p>
+
+<pre>client.calls.create(
+    to=to_number,
+    from_=from_number,
+    url="...",
+    record=True,
+    recording_status_callback="https://your-app.com/webhook/recording-status",
+    recording_status_callback_method="POST",
+)</pre>
+
+<p>Key benefits of storing recordings in S3:</p>
+<ul>
+  <li>You control retention — delete after 30, 90, or 365 days per your compliance policy</li>
+  <li>No Twilio credentials needed in the browser — audio is served via presigned URLs</li>
+  <li>Cost: S3 storage is ~$0.023/GB/month. A 1-minute mono MP3 ≈ 1MB</li>
+  <li>Recordings are scoped to <code>account_sid</code> in the S3 key path — access control is consistent with the rest of the dashboard</li>
+</ul>
+
+<!-- ─────────────────────────────────────────── -->
+<h2>7. Going to Production</h2>
+
+<p>The proof of concept uses SQLite and a demo token. A production deployment requires the following changes:</p>
+
+<table>
+  <tr><th>Area</th><th>PoC (demo)</th><th>Production</th></tr>
+  <tr><td>Database</td><td>SQLite</td><td>PostgreSQL (AWS RDS, Supabase, Neon)</td></tr>
+  <tr><td>App server</td><td>Flask dev server</td><td>Gunicorn behind nginx or a managed platform (Fly.io, Render, ECS)</td></tr>
+  <tr><td>Authentication</td><td>Single shared token</td><td>SSO/OAuth (Okta, Auth0) or per-user login scoped to account_sid</td></tr>
+  <tr><td>HTTPS</td><td>ngrok tunnel</td><td>Custom domain + TLS certificate (Let's Encrypt or ACM)</td></tr>
+  <tr><td>Secrets</td><td>.env file</td><td>AWS Secrets Manager, HashiCorp Vault, or Doppler</td></tr>
+  <tr><td>Recording storage</td><td>None / Twilio only</td><td>AWS S3 with IAM least-privilege access</td></tr>
+  <tr><td>Monitoring</td><td>None</td><td>/api/health endpoint + uptime alert + dead-letter queue alert</td></tr>
+</table>
+
+<p>See the full checklist in <strong>PRODUCTION_GUIDE.md</strong> in the reference repository.</p>
+
+<!-- ─────────────────────────────────────────── -->
+<h2>9. Access Control</h2>
 
 <p>
   Because the dashboard is your own application, you have full control over who sees what.
@@ -388,7 +446,7 @@ CREATE INDEX idx_conference_logs_account_sid ON conference_logs (account_sid);</
 </ol>
 
 <!-- ─────────────────────────────────────────── -->
-<h2>7. Best Practices</h2>
+<h2>10. Best Practices</h2>
 
 <h3>Handle schema changes gracefully</h3>
 <p>Always store the full raw event payload in a JSON column. Access all fields with safe fallbacks (<code>.get()</code> in Python). When Twilio updates an event schema, re-parse from stored raw payloads without data loss.</p>
@@ -416,7 +474,7 @@ CREATE INDEX idx_conference_logs_account_sid ON conference_logs (account_sid);</
 </ul>
 
 <!-- ─────────────────────────────────────────── -->
-<h2>8. Optional: Grafana Integration</h2>
+<h2>11. Optional: Grafana Integration</h2>
 
 <p>
   If the customer wants advanced visualization without building a custom frontend,
@@ -442,7 +500,7 @@ ORDER BY 1;</pre>
 <p>Use Grafana template variables to create a subaccount dropdown that filters all panels simultaneously.</p>
 
 <!-- ─────────────────────────────────────────── -->
-<h2>9. Frequently Asked Questions</h2>
+<h2>12. Frequently Asked Questions</h2>
 
 <table>
   <tr><th>Question</th><th>Answer</th></tr>
@@ -473,7 +531,7 @@ ORDER BY 1;</pre>
 </table>
 
 <!-- ─────────────────────────────────────────── -->
-<h2>10. Resources</h2>
+<h2>13. Resources</h2>
 
 <ul>
   <li>Twilio Event Streams documentation: https://www.twilio.com/docs/events</li>
@@ -484,7 +542,7 @@ ORDER BY 1;</pre>
 </ul>
 
 <!-- ─────────────────────────────────────────── -->
-<h2>11. Build Time Estimates</h2>
+<h2>14. Build Time Estimates</h2>
 
 <h3>Minimum viable demo</h3>
 <p><strong>1–2 days</strong> for a developer already familiar with Python and webhooks.</p>
@@ -547,7 +605,7 @@ ORDER BY 1;</pre>
 </div>
 
 <!-- ─────────────────────────────────────────── -->
-<h2>12. Cost Breakdown</h2>
+<h2>15. Cost Breakdown</h2>
 
 <h3>Twilio side</h3>
 
@@ -617,7 +675,7 @@ ORDER BY 1;</pre>
 </div>
 
 <div class="footer">
-  Twilio Customer Engineering · For internal and customer use · Not for redistribution
+  Twilio Customer Engineering · Reference implementation: github.com/avieira-twilio/twilio-event-streams-demo · For internal and customer use
 </div>
 
 </body>
