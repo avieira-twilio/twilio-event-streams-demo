@@ -1,0 +1,36 @@
+version: "3.9"
+
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "5000:5000"
+    env_file:
+      - ../.env
+    environment:
+      - FLASK_ENV=production
+      - DATABASE_URL=postgresql://dashuser:password@db:5432/twilio_dashboard
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ..:/app  # Remove this line in production (live-reload only)
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dashuser
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: twilio_dashboard
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dashuser"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

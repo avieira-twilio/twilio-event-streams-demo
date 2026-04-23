@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Sign In — Twilio Event Streams Demo{% endblock %}
+{% block body %}
+<div style="display:flex;align-items:center;justify-content:center;min-height:calc(100vh - 52px)">
+  <div style="background:#fff;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.1);
+              padding:2.5rem 2rem;width:100%;max-width:380px;">
+    <h1 style="font-size:1.25rem;margin-bottom:0.25rem">Sign In</h1>
+    <p style="font-size:0.875rem;color:#777;margin-bottom:1.5rem">
+      Enter the dashboard access token to continue.
+    </p>
+    {% if error %}
+      <p style="color:#c0392b;font-size:0.875rem;margin-bottom:1rem;
+                background:#fdecea;padding:0.5rem 0.75rem;border-radius:5px;">
+        {{ error }}
+      </p>
+    {% endif %}
+    <form method="post" action="/login{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}">
+      <label style="display:block;font-size:0.875rem;font-weight:500;margin-bottom:0.35rem">
+        Access Token
+      </label>
+      <input type="password" name="token" autofocus autocomplete="current-password"
+             style="width:100%;margin-bottom:1.25rem" placeholder="Enter access token" />
+      <button class="btn btn-primary" style="width:100%">Continue</button>
+    </form>
+    <p style="margin-top:1.25rem;font-size:0.78rem;color:#aaa;text-align:center;">
+      Demo use only — not for production.
+    </p>
+  </div>
+</div>
+{% endblock %}

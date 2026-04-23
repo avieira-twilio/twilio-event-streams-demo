@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      font-size: 11pt;
+      line-height: 1.6;
+      color: #202124;
+      max-width: 750px;
+      margin: 40px auto;
+      padding: 0 24px;
+    }
+    h1 { font-size: 20pt; color: #F22F46; margin-bottom: 4px; }
+    h2 { font-size: 14pt; color: #0d1b2a; border-bottom: 2px solid #F22F46; padding-bottom: 4px; margin-top: 32px; }
+    h3 { font-size: 12pt; color: #0d1b2a; margin-top: 20px; margin-bottom: 6px; }
+    .subtitle { font-size: 11pt; color: #666; margin-bottom: 32px; }
+    p { margin: 8px 0; }
+    ul, ol { margin: 8px 0 8px 24px; }
+    li { margin-bottom: 4px; }
+    code {
+      font-family: "Courier New", monospace;
+      font-size: 9.5pt;
+      background: #f5f5f5;
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+    pre {
+      font-family: "Courier New", monospace;
+      font-size: 9pt;
+      background: #f5f5f5;
+      border-left: 4px solid #F22F46;
+      padding: 12px 16px;
+      margin: 12px 0;
+      overflow-x: auto;
+      white-space: pre;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 12px 0;
+      font-size: 10pt;
+    }
+    th {
+      background: #0d1b2a;
+      color: #fff;
+      padding: 8px 12px;
+      text-align: left;
+    }
+    td {
+      padding: 7px 12px;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    tr:nth-child(even) td { background: #f9f9f9; }
+    .callout {
+      background: #fff8e1;
+      border-left: 4px solid #F22F46;
+      padding: 10px 16px;
+      margin: 16px 0;
+      border-radius: 0 4px 4px 0;
+    }
+    .callout b { color: #F22F46; }
+    .arch {
+      font-family: "Courier New", monospace;
+      font-size: 9.5pt;
+      background: #f0f4ff;
+      border: 1px solid #c5d0e8;
+      padding: 16px 20px;
+      margin: 12px 0;
+      border-radius: 4px;
+      line-height: 1.8;
+    }
+    .footer {
+      margin-top: 48px;
+      padding-top: 16px;
+      border-top: 1px solid #e0e0e0;
+      font-size: 9pt;
+      color: #999;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Building a Subaccount Call &amp; Conference Log Dashboard</h1>
+<p class="subtitle">Using Twilio Event Streams to export read-only data at the subaccount level</p>
+
+<!-- ─────────────────────────────────────────── -->
+<h2>1. The Problem</h2>
+
+<p>
+  Twilio Console does not currently support granting <strong>read-only access to call or
+  conference logs at the subaccount level</strong>. Any user with Console access to a
+  subaccount has full administrative rights — there is no viewer-only role.
+</p>
+
+<p>This creates a real gap for customers in situations like:</p>
+<ul>
+  <li>A managed service provider with one subaccount per client who wants to give each client visibility into their own call data.</li>
+  <li>An internal team that needs to audit call volume and error rates without access to account settings.</li>
+  <li>A compliance officer who needs a read-only log of all calls across subaccounts.</li>
+</ul>
+
+<div class="callout">
+  <b>Twilio Support's recommendation:</b> Use <strong>Event Streams</strong> to export
+  Voice Insights and Conference Insights events in real time to a webhook, then build
+  a custom read-only visualization layer on top of that data.
+</div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2>2. Solution Overview: Twilio Event Streams</h2>
+
+<p>
+  Twilio Event Streams is a first-party Twilio product that pushes real-time events
+  from your account to a destination of your choice — a webhook, Amazon Kinesis, or
+  Segment. For this use case, a webhook is the simplest approach.
+</p>
+
+<p>Every time a call or conference completes on your account or any subaccount, Twilio's
+Voice Insights engine generates a rich event containing call details, quality metrics,
+and — critically — the <code>account_sid</code> field that identifies which subaccount
+the call originated from.</p>
+
+<div class="arch">
+Twilio Master Account<br>
+  ├── Subaccount A  (ACaaa...)<br>
+  ├── Subaccount B  (ACbbb...)<br>
+  └── Subaccount C  (ACccc...)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│  Voice Insights events (~60s after call ends)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;▼<br>
+Event Streams Subscription  (on master account)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;│  HTTP POST — CloudEvents 1.0 format<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;▼<br>
+Your Webhook  →  Database  →  Read-Only Dashboard<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(filtered by account_sid)
+</div>
+
+<p>
+  By creating the subscription on the <strong>master account</strong>, you receive events
+  from all subaccounts in one stream. The <code>account_sid</code> in each event tells
+  you which subaccount it belongs to, enabling per-subaccount filtering in your dashboard.
+</p>
+
+<!-- ─────────────────────────────────────────── -->
+<h2>3. Relevant Event Types</h2>
+
+<table>
+  <tr>
+    <th>Event Type</th>
+    <th>Fires When</th>
+  </tr>
+  <tr>
+    <td><code>com.twilio.voice.insights.call-summary.complete</code></td>
+    <td>A call completes and full Voice Insights processing finishes</td>
+  </tr>
+  <tr>
+    <td><code>com.twilio.voice.insights.call-summary.partial</code></td>
+    <td>Partial summary available (~30s after call ends, faster)</td>
+  </tr>
+  <tr>
+    <td><code>com.twilio.voice.insights.conference-summary.complete</code></td>
+    <td>A conference ends</td>
+  </tr>
+  <tr>
+    <td><code>com.twilio.voice.insights.conference-participant-summary.complete</code></td>
+    <td>A conference participant disconnects</td>
+  </tr>
+</table>
+
+<!-- ─────────────────────────────────────────── -->
+<h2>4. Event Payload Structure</h2>
+
+<p>
+  Twilio Event Streams uses the <strong>CloudEvents 1.0</strong> specification. Each
+  HTTP POST contains a JSON array. Call data lives inside the <code>data</code> object
+  and uses snake_case field names.
+</p>
+
+<pre>[
+  {
+    "specversion": "1.0",
+    "type": "com.twilio.voice.insights.call-summary.complete",
+    "id": "EZxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "time": "2026-04-23T02:08:35.000Z",
+    "data": {
+      "call_sid":       "CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "account_sid":    "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",  // subaccount identifier
+      "call_state":     "completed",
+      "duration":       45,
+      "start_time":     "2026-04-23T02:07:50Z",
+      "end_time":       "2026-04-23T02:08:35Z",
+      "properties": {
+        "direction":    "outbound_api"
+      },
+      "from": { "caller": "+15551234567" },
+      "to":   { "callee": "+15559876543" }
+    }
+  }
+]</pre>
+
+<p>Key fields to store:</p>
+<ul>
+  <li><code>data.account_sid</code> — which subaccount the call belongs to</li>
+  <li><code>data.call_sid</code> — the Call SID for cross-referencing with the REST API</li>
+  <li><code>data.call_state</code> — final status (completed, failed, busy, no-answer)</li>
+  <li><code>data.duration</code> — call duration in seconds</li>
+  <li><code>data.properties.direction</code> — inbound, outbound_api, outbound_dial</li>
+  <li><code>data.from.caller</code> / <code>data.to.callee</code> — phone numbers</li>
+</ul>
+
+<!-- ─────────────────────────────────────────── -->
+<h2>5. Step-by-Step Implementation</h2>
+
+<h3>Step 1 — Prerequisites</h3>
+<ul>
+  <li>A Twilio account with one or more subaccounts</li>
+  <li>Voice Insights enabled (available on all accounts by default)</li>
+  <li>A public HTTPS URL for your webhook (use <strong>ngrok</strong> for local development)</li>
+  <li>Python 3.9+ with the <code>twilio</code> library installed: <code>pip install twilio flask</code></li>
+</ul>
+
+<h3>Step 2 — Create a Sink (the webhook destination)</h3>
+
+<p>Run this once using your <strong>master account</strong> credentials:</p>
+
+<pre>from twilio.rest import Client
+
+client = Client("ACyour_master_account_sid", "your_master_auth_token")
+
+sink = client.events.v1.sinks.create(
+    description="Call & Conference Log Dashboard",
+    sink_configuration={
+        "destination": "https://your-app.com/webhook/events",
+        "method": "POST",
+        "batch_events": False,
+    },
+    sink_type="webhook",
+)
+print("Sink SID:", sink.sid)  # Save this — DGxxxxx</pre>
+
+<h3>Step 3 — Create a Subscription</h3>
+
+<pre>subscription = client.events.v1.subscriptions.create(
+    description="Voice Insights — Subaccount Dashboard",
+    sink_sid=sink.sid,
+    types=[
+        {"type": "com.twilio.voice.insights.call-summary.complete"},
+        {"type": "com.twilio.voice.insights.call-summary.partial"},
+        {"type": "com.twilio.voice.insights.conference-summary.complete"},
+        {"type": "com.twilio.voice.insights.conference-participant-summary.complete"},
+    ],
+)
+print("Subscription SID:", subscription.sid)</pre>
+
+<h3>Step 4 — Build the Webhook Receiver</h3>
+
+<p>
+  Your webhook must validate the Twilio signature on every request, then parse
+  the CloudEvents array and store each event in your database.
+</p>
+
+<pre>from flask import Flask, request, jsonify
+from twilio.request_validator import RequestValidator
+
+app = Flask(__name__)
+MASTER_AUTH_TOKEN = "your_master_auth_token"
+
+@app.post("/webhook/events")
+def receive_event():
+    # 1. Validate Twilio signature
+    validator = RequestValidator(MASTER_AUTH_TOKEN)
+    sig  = request.headers.get("X-Twilio-Signature", "")
+    body = request.get_data(as_text=True)
+    if not validator.validate(request.url, body, sig):
+        return jsonify({"error": "Forbidden"}), 403
+
+    # 2. Parse the CloudEvents array
+    for event in request.get_json(force=True) or []:
+        event_type = event.get("type")
+        data       = event.get("data", {})
+
+        account_sid = data.get("account_sid")       # subaccount identifier
+        call_sid    = data.get("call_sid")
+        status      = data.get("call_state")
+        duration    = data.get("duration")
+        direction   = (data.get("properties") or {}).get("direction")
+        from_number = (data.get("from") or {}).get("caller")
+        to_number   = (data.get("to")   or {}).get("callee")
+        started_at  = data.get("start_time")
+
+        # 3. Store in your database (insert or upsert on call_sid)
+        save_to_db(
+            account_sid=account_sid,
+            call_sid=call_sid,
+            status=status,
+            duration=duration,
+            direction=direction,
+            from_number=from_number,
+            to_number=to_number,
+            started_at=started_at,
+            raw_payload=event,        # always store the full event
+        )
+
+    return jsonify({"status": "ok"}), 200</pre>
+
+<h3>Step 5 — Database Schema</h3>
+
+<p>Store events in a relational database (PostgreSQL recommended for production, SQLite for development). Index on <code>account_sid</code> and <code>started_at</code> for fast subaccount filtering.</p>
+
+<pre>-- Call logs
+CREATE TABLE call_logs (
+    id               SERIAL PRIMARY KEY,
+    account_sid      VARCHAR(34) NOT NULL,
+    call_sid         VARCHAR(34) UNIQUE NOT NULL,
+    status           VARCHAR(20),
+    direction        VARCHAR(20),
+    from_number      VARCHAR(20),
+    to_number        VARCHAR(20),
+    duration_seconds INTEGER,
+    started_at       TIMESTAMP,
+    ended_at         TIMESTAMP,
+    raw_payload      JSONB        -- full original event for replay
+);
+
+CREATE INDEX idx_call_logs_account_sid ON call_logs (account_sid);
+CREATE INDEX idx_call_logs_started_at  ON call_logs (started_at);
+
+-- Conference logs
+CREATE TABLE conference_logs (
+    id               SERIAL PRIMARY KEY,
+    account_sid      VARCHAR(34) NOT NULL,
+    conference_sid   VARCHAR(34) UNIQUE NOT NULL,
+    friendly_name    VARCHAR(255),
+    status           VARCHAR(20),
+    participant_count INTEGER,
+    duration_seconds INTEGER,
+    started_at       TIMESTAMP,
+    raw_payload      JSONB
+);
+
+CREATE INDEX idx_conference_logs_account_sid ON conference_logs (account_sid);</pre>
+
+<div class="callout">
+  <b>Why store raw_payload?</b> Twilio occasionally updates Voice Insights event schemas.
+  Storing the full original event means you never lose data — you can re-parse it at any
+  time if your schema needs to change.
+</div>
+
+<h3>Step 6 — Build the Dashboard</h3>
+
+<p>The dashboard queries your database filtered by <code>account_sid</code>. Because this is your own application, you control access completely.</p>
+
+<p>Recommended features:</p>
+<ul>
+  <li><strong>Subaccount filter</strong> — dropdown of distinct <code>account_sid</code> values</li>
+  <li><strong>Date range filter</strong> — filter on <code>started_at</code></li>
+  <li><strong>Status filter</strong> — completed, failed, busy, no-answer</li>
+  <li><strong>Call volume chart</strong> — daily counts grouped by subaccount</li>
+  <li><strong>Duration chart</strong> — average call duration per subaccount</li>
+  <li><strong>Error rate chart</strong> — percentage of failed/busy/no-answer calls over time</li>
+  <li><strong>Call log table</strong> — paginated, sortable list of all calls</li>
+</ul>
+
+<p>Technology options (all free/open-source):</p>
+<table>
+  <tr><th>Layer</th><th>Recommended</th><th>Alternative</th></tr>
+  <tr><td>Backend</td><td>Python + Flask</td><td>Node.js + Express</td></tr>
+  <tr><td>Database</td><td>PostgreSQL</td><td>SQLite (dev/demo)</td></tr>
+  <tr><td>Charts</td><td>Chart.js (CDN)</td><td>Grafana (PostgreSQL source)</td></tr>
+  <tr><td>Auth</td><td>Auth0 / SSO</td><td>Token-based session (demo)</td></tr>
+</table>
+
+<!-- ─────────────────────────────────────────── -->
+<h2>6. Access Control</h2>
+
+<p>
+  Because the dashboard is your own application, you have full control over who sees what.
+  A simple approach for giving clients read-only access to their own subaccount:
+</p>
+
+<ol>
+  <li>Each client user is assigned their subaccount's <code>account_sid</code> at login.</li>
+  <li>Every database query is scoped to that <code>account_sid</code> — users can never see other subaccounts' data.</li>
+  <li>The application layer has no Twilio credentials — it only reads from the database.</li>
+  <li>Clients cannot modify any Twilio configuration because they never touch Twilio directly.</li>
+</ol>
+
+<!-- ─────────────────────────────────────────── -->
+<h2>7. Best Practices</h2>
+
+<h3>Handle schema changes gracefully</h3>
+<p>Always store the full raw event payload in a JSON column. Access all fields with safe fallbacks (<code>.get()</code> in Python). When Twilio updates an event schema, re-parse from stored raw payloads without data loss.</p>
+
+<h3>Monitor for dropped events</h3>
+<ul>
+  <li>Store the <code>X-Twilio-Event-Id</code> header from each request. Gaps in sequential IDs indicate dropped events.</li>
+  <li>Maintain a dead-letter queue — any event that fails to parse should be flagged for retry.</li>
+  <li>Expose a <code>/health</code> endpoint showing the timestamp of the last received event and count of unprocessed events.</li>
+  <li>Periodically cross-reference against the Twilio REST API: <code>client.calls.list()</code> per subaccount vs. database row counts.</li>
+</ul>
+
+<h3>Signature validation</h3>
+<ul>
+  <li>Never disable Twilio signature validation in production.</li>
+  <li>If running behind a reverse proxy (nginx, load balancer), ensure <code>request.url</code> matches what Twilio signed. Use <code>ProxyFix</code> middleware in Flask.</li>
+  <li>Use the Auth Token of the account that <em>owns</em> the subscription — master account token for master-level subscriptions.</li>
+</ul>
+
+<h3>Event timing</h3>
+<ul>
+  <li><code>call-summary.partial</code> arrives ~30 seconds after call completion — good for near-real-time display.</li>
+  <li><code>call-summary.complete</code> arrives within a few minutes — includes full quality metrics.</li>
+  <li>Upsert on <code>call_sid</code> so partial and complete events update the same row.</li>
+</ul>
+
+<!-- ─────────────────────────────────────────── -->
+<h2>8. Optional: Grafana Integration</h2>
+
+<p>
+  If the customer wants advanced visualization without building a custom frontend,
+  Grafana connects directly to PostgreSQL and provides rich charting out of the box.
+</p>
+
+<ol>
+  <li>Run Grafana: <code>docker run -p 3000:3000 grafana/grafana</code></li>
+  <li>Add a PostgreSQL data source pointing to your database.</li>
+  <li>Build panels using direct SQL queries:</li>
+</ol>
+
+<pre>-- Call volume by subaccount over time
+SELECT
+  date_trunc('day', started_at) AS time,
+  account_sid,
+  count(*)                       AS calls
+FROM call_logs
+WHERE started_at BETWEEN $__timeFrom() AND $__timeTo()
+GROUP BY 1, 2
+ORDER BY 1;</pre>
+
+<p>Use Grafana template variables to create a subaccount dropdown that filters all panels simultaneously.</p>
+
+<!-- ─────────────────────────────────────────── -->
+<h2>9. Frequently Asked Questions</h2>
+
+<table>
+  <tr><th>Question</th><th>Answer</th></tr>
+  <tr>
+    <td>Does Event Streams cost extra?</td>
+    <td>Event Streams is free to set up. Voice Insights Advanced features have associated costs — check current pricing. Basic call summaries have minimal cost impact.</td>
+  </tr>
+  <tr>
+    <td>Does this work for inbound calls?</td>
+    <td>Yes. The <code>direction</code> field distinguishes inbound, outbound_api, and outbound_dial.</td>
+  </tr>
+  <tr>
+    <td>What if my webhook is down?</td>
+    <td>Twilio retries failed webhook deliveries automatically. Store event IDs to detect any permanent gaps.</td>
+  </tr>
+  <tr>
+    <td>Can I subscribe per subaccount instead?</td>
+    <td>Yes — create a separate subscription on each subaccount using that subaccount's credentials. More granular but more overhead. Master-account subscription is simpler for most use cases.</td>
+  </tr>
+  <tr>
+    <td>How far back does data go?</td>
+    <td>Event Streams only delivers events going forward from when the subscription is created. Historical data must be fetched via the REST API separately.</td>
+  </tr>
+  <tr>
+    <td>Can I use this for SMS logs too?</td>
+    <td>Yes — Event Streams supports messaging events (<code>com.twilio.messaging.message.*</code>). The same pattern applies.</td>
+  </tr>
+</table>
+
+<!-- ─────────────────────────────────────────── -->
+<h2>10. Resources</h2>
+
+<ul>
+  <li>Twilio Event Streams documentation: https://www.twilio.com/docs/events</li>
+  <li>Voice Insights event schemas: https://events-schemas.twilio.com</li>
+  <li>CloudEvents specification: https://cloudevents.io</li>
+  <li>Twilio request validation: https://www.twilio.com/docs/usage/webhooks/webhooks-security</li>
+  <li>Event Streams error codes: https://www.twilio.com/docs/errors/20409</li>
+</ul>
+
+<!-- ─────────────────────────────────────────── -->
+<h2>11. Build Time Estimates</h2>
+
+<h3>Minimum viable demo</h3>
+<p><strong>1–2 days</strong> for a developer already familiar with Python and webhooks.</p>
+
+<h3>Production-ready version for a real client</h3>
+<p><strong>3–6 weeks</strong> depending on scope:</p>
+
+<table>
+  <tr><th>Phase</th><th>Work</th><th>Estimate</th></tr>
+  <tr>
+    <td>Event Streams setup</td>
+    <td>Sink + Subscription creation, test events</td>
+    <td>0.5 days</td>
+  </tr>
+  <tr>
+    <td>Webhook receiver</td>
+    <td>Signature validation, raw logging, event parser</td>
+    <td>2–3 days</td>
+  </tr>
+  <tr>
+    <td>Database</td>
+    <td>Schema design, migrations, indexing</td>
+    <td>1–2 days</td>
+  </tr>
+  <tr>
+    <td>API layer</td>
+    <td>Filtered endpoints for calls, conferences, charts</td>
+    <td>2–3 days</td>
+  </tr>
+  <tr>
+    <td>Dashboard frontend</td>
+    <td>Filters, charts, data tables</td>
+    <td>3–5 days</td>
+  </tr>
+  <tr>
+    <td>Auth &amp; access control</td>
+    <td>SSO or role-based login scoped per subaccount</td>
+    <td>3–5 days</td>
+  </tr>
+  <tr>
+    <td>Deployment &amp; hosting</td>
+    <td>Cloud setup, domain, SSL, CI/CD</td>
+    <td>2–3 days</td>
+  </tr>
+  <tr>
+    <td>Monitoring &amp; alerting</td>
+    <td>Health checks, dead-letter queue alerts</td>
+    <td>1–2 days</td>
+  </tr>
+  <tr>
+    <td>Testing &amp; QA</td>
+    <td>End-to-end with real calls, edge cases</td>
+    <td>2–3 days</td>
+  </tr>
+</table>
+
+<div class="callout">
+  <b>The biggest variable is auth.</b> A demo token takes an hour. A proper SSO
+  integration (Okta, Auth0, Google) with per-subaccount scoping takes a full week.
+</div>
+
+<!-- ─────────────────────────────────────────── -->
+<h2>12. Cost Breakdown</h2>
+
+<h3>Twilio side</h3>
+
+<table>
+  <tr><th>Item</th><th>Cost</th></tr>
+  <tr>
+    <td>Event Streams</td>
+    <td><strong>Free</strong> — no charge to create sinks and subscriptions</td>
+  </tr>
+  <tr>
+    <td>Voice Insights Basic</td>
+    <td><strong>Free</strong> — included on all accounts. Covers <code>call-summary.complete</code> and <code>call-summary.partial</code> events</td>
+  </tr>
+  <tr>
+    <td>Voice Insights Advanced</td>
+    <td><strong>Paid</strong> — adds per-call quality metrics, SDK events, gateway events. Pricing varies by account tier</td>
+  </tr>
+  <tr>
+    <td>Calls used for testing</td>
+    <td>Normal per-minute rates apply</td>
+  </tr>
+</table>
+
+<div class="callout">
+  <b>Note:</b> Always verify current Voice Insights pricing at twilio.com/pricing or
+  with your Twilio account team — pricing can change and may vary by contract.
+</div>
+
+<h3>Infrastructure side (hosting the dashboard)</h3>
+
+<table>
+  <tr><th>Item</th><th>Free / Dev Option</th><th>Production Option</th></tr>
+  <tr>
+    <td>App hosting</td>
+    <td>Railway, Render, Fly.io free tier</td>
+    <td>~$10–30/month (small instance)</td>
+  </tr>
+  <tr>
+    <td>Database</td>
+    <td>SQLite (local), Render free PostgreSQL</td>
+    <td>~$15–25/month (managed PostgreSQL)</td>
+  </tr>
+  <tr>
+    <td>Domain + SSL</td>
+    <td>ngrok free tier (dev only)</td>
+    <td>~$10–15/year + free SSL via Let's Encrypt</td>
+  </tr>
+  <tr>
+    <td>Monitoring</td>
+    <td>None</td>
+    <td>~$0–20/month (Datadog free tier, UptimeRobot)</td>
+  </tr>
+</table>
+
+<p><strong>Realistic monthly infrastructure cost for a small production deployment: $25–75/month.</strong></p>
+<p>For a Twilio employee running an internal demo: <strong>effectively $0</strong> using free tiers.</p>
+
+<h3>Summary for the customer</h3>
+
+<div class="callout">
+  The integration takes <b>3–6 weeks</b> for a production deployment. The main
+  engineering effort is in auth, hosting, and monitoring — not the Twilio side.
+  Twilio Event Streams and basic Voice Insights are <b>free</b>. Infrastructure
+  costs are typically <b>under $100/month</b> for a small deployment. The ongoing
+  maintenance burden is low once running — the main thing to watch is Twilio event
+  schema updates, which happen a few times per year.
+</div>
+
+<div class="footer">
+  Twilio Customer Engineering · For internal and customer use · Not for redistribution
+</div>
+
+</body>
+</html>

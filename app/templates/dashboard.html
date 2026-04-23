@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Twilio Event Streams Demo{% endblock %}
+
+{% block body %}
+<div class="container">
+
+  <!-- Filter bar -->
+  <div class="card" style="margin-top:1.25rem">
+    <div style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:flex-end;">
+      <div>
+        <label style="display:block;font-size:0.75rem;font-weight:600;color:#555;margin-bottom:3px;">
+          Subaccount
+        </label>
+        <select id="filter-account">
+          <option value="">All subaccounts</option>
+        </select>
+      </div>
+      <div>
+        <label style="display:block;font-size:0.75rem;font-weight:600;color:#555;margin-bottom:3px;">
+          From
+        </label>
+        <input type="date" id="filter-from" />
+      </div>
+      <div>
+        <label style="display:block;font-size:0.75rem;font-weight:600;color:#555;margin-bottom:3px;">
+          To
+        </label>
+        <input type="date" id="filter-to" />
+      </div>
+      <div>
+        <label style="display:block;font-size:0.75rem;font-weight:600;color:#555;margin-bottom:3px;">
+          Status
+        </label>
+        <select id="filter-status">
+          <option value="">All statuses</option>
+          <option value="completed">completed</option>
+          <option value="failed">failed</option>
+          <option value="busy">busy</option>
+          <option value="no-answer">no-answer</option>
+          <option value="canceled">canceled</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" id="apply-filters">Apply</button>
+      <button class="btn btn-secondary" id="reset-filters">Reset</button>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="charts-grid">
+    <div class="card">
+      <h2>Call Volume (by Day)</h2>
+      <canvas id="chart-volume" height="200"></canvas>
+    </div>
+    <div class="card">
+      <h2>Avg Call Duration (seconds)</h2>
+      <canvas id="chart-duration" height="200"></canvas>
+    </div>
+    <div class="card">
+      <h2>Error Rate (by Day)</h2>
+      <canvas id="chart-errors" height="200"></canvas>
+    </div>
+    <div class="card">
+      <h2>Call Status Breakdown</h2>
+      <canvas id="chart-status" height="200"></canvas>
+    </div>
+  </div>
+
+  <!-- Data tables -->
+  <div class="card">
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="calls">Call Logs</button>
+      <button class="tab-btn" data-tab="conferences">Conference Logs</button>
+    </div>
+
+    <!-- Call logs tab -->
+    <div id="tab-calls" class="tab-panel active">
+      <table id="calls-table">
+        <thead>
+          <tr>
+            <th>Call SID</th>
+            <th>Subaccount</th>
+            <th>Direction</th>
+            <th>From</th>
+            <th>To</th>
+            <th>Status</th>
+            <th>Duration (s)</th>
+            <th>Started</th>
+          </tr>
+        </thead>
+        <tbody id="calls-tbody">
+          <tr><td colspan="8" style="text-align:center;color:#aaa;padding:2rem">Loading&hellip;</td></tr>
+        </tbody>
+      </table>
+      <div class="pagination" id="calls-pagination"></div>
+    </div>
+
+    <!-- Conference logs tab -->
+    <div id="tab-conferences" class="tab-panel">
+      <table id="conferences-table">
+        <thead>
+          <tr>
+            <th>Conference SID</th>
+            <th>Subaccount</th>
+            <th>Friendly Name</th>
+            <th>Status</th>
+            <th>Participants</th>
+            <th>Duration (s)</th>
+            <th>Started</th>
+          </tr>
+        </thead>
+        <tbody id="conferences-tbody">
+          <tr><td colspan="7" style="text-align:center;color:#aaa;padding:2rem">Loading&hellip;</td></tr>
+        </tbody>
+      </table>
+      <div class="pagination" id="conferences-pagination"></div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="/static/js/charts.js"></script>
+{% endblock %}
